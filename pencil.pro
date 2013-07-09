@@ -68,7 +68,8 @@ HEADERS +=  src/interfaces.h \
     src/util/keyboardmanager.h \
     src/interface/mainwindow2.h \
     src/interface/timelinecells.h \
-    src/graphics/vector/vectorselection.h
+    src/graphics/vector/vectorselection.h \
+    src/util/pencildef.h
 
 SOURCES +=  src/graphics/bitmap/blur.cpp \
             src/graphics/bitmap/bitmapimage.cpp \
@@ -129,7 +130,6 @@ macx {
     HEADERS += src/external/macosx/style.h
     SOURCES += src/external/macosx/macosx.cpp \
            src/external/macosx/style.cpp
-        LIBS += -Llibmacosx
     RC_FILE = pencil.icns
 }
 linux-g++ {
