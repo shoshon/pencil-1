@@ -5,10 +5,15 @@
 
 #include <QObject>
 #include <QString>
-#include <functional>
+
 
 class Object;
 
+class PencilError
+{
+public:
+    QString message;
+};
 
 class ObjectSaveLoader : public QObject
 {
@@ -16,11 +21,12 @@ class ObjectSaveLoader : public QObject
 
 public:
     explicit ObjectSaveLoader(QObject *parent = 0);
-    Object* load(QString strFilename);
-    bool    save(Object* object, QString strFileName);
+    Object* loadFile(QString strFilename, PencilError* error);
+    bool    saveFile(Object* object, QString strFileName, PencilError* error);
 
 signals:
-
+    void loadingProgressUpdated(float);
+    void savingProgressUpdated(float);
 public slots:
 
 };
