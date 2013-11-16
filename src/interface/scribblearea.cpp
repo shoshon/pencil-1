@@ -24,21 +24,8 @@ GNU General Public License for more details.
 #include "layercamera.h"
 #include "bitmapimage.h"
 #include "pencilsettings.h"
-
-//#include "colormanager.h"
+#include "toolmanager.h"
 #include "strokemanager.h"
-
-#include "pentool.h"
-#include "penciltool.h"
-#include "brushtool.h"
-#include "buckettool.h"
-#include "erasertool.h"
-#include "eyedroppertool.h"
-#include "handtool.h"
-#include "movetool.h"
-#include "polylinetool.h"
-#include "selecttool.h"
-#include "smudgetool.h"
 #include "popupcolorpalettewidget.h"
 
 #include "scribblearea.h"
@@ -51,25 +38,6 @@ ScribbleArea::ScribbleArea(QWidget *parent, Editor *editor)
     this->m_pEditor = editor;
     m_strokeManager = new StrokeManager();
 
-    m_currentTool = NULL;
-
-    m_toolSetHash.insert(PEN, new PenTool);
-    m_toolSetHash.insert(PENCIL, new PencilTool);
-    m_toolSetHash.insert(BRUSH, new BrushTool);
-    m_toolSetHash.insert(ERASER, new EraserTool);
-    m_toolSetHash.insert(BUCKET, new BucketTool);
-    m_toolSetHash.insert(EYEDROPPER, new EyedropperTool);
-    m_toolSetHash.insert(HAND, new HandTool);
-    m_toolSetHash.insert(MOVE, new MoveTool);
-    m_toolSetHash.insert(POLYLINE, new PolylineTool);
-    m_toolSetHash.insert(SELECT, new SelectTool);
-    m_toolSetHash.insert(SMUDGE, new SmudgeTool);
-
-    foreach (BaseTool *tool, getTools())
-    {
-        tool->initialize(editor, this);
-    }
-
     QSettings settings("Pencil", "Pencil");
 
     followContour = 0;
@@ -79,17 +47,26 @@ ScribbleArea::ScribbleArea(QWidget *parent, Editor *editor)
     if (curveSmoothingLevel == 0) { curveSmoothingLevel = 20; settings.setValue("curveSmoothing", curveSmoothingLevel); } // default
     curveSmoothing = curveSmoothingLevel / 20.0; // default value is 1.0
 
-    if (settings.value("highResPosition").toString() == "true")
+    if (settings.value( SETTING_HIGH_RESOLUTION ).toString() == "true")
     {
         m_strokeManager->useHighResPosition(true);
     }
 
     m_antialiasing = true; // default value is true (because it's prettier)
-    if (settings.value("antialiasing").toString() == "false") { m_antialiasing = false; }
+    if (settings.value("antialiasing").toString() == "false")
+    {
+        m_antialiasing = false;
+    }
     shadows = false; // default value is false
-    if (settings.value("shadows").toString() == "true") { shadows = true; }
+    if (settings.value("shadows").toString() == "true")
+    {
+        shadows = true;
+    }
     gradients = 2;
-    if (settings.value("gradients").toString() != "") { gradients = settings.value("gradients").toInt(); };
+    if (settings.value("gradients").toString() != "")
+    {
+        gradients = settings.value("gradients").toInt();
+    };
 
     tabletEraserBackupToolMode = -1;
     setAttribute(Qt::WA_StaticContents); // ?
@@ -140,8 +117,14 @@ ScribbleArea::ScribbleArea(QWidget *parent, Editor *editor)
 
     // color wheel popup
     m_popupPaletteWidget = new PopupColorPaletteWidget( this );
-    //connect( this, SIGNAL(colorChanged(QColor)), this->m_pEditor->colorManager(), SLOT(pickColor(QColor)) );
-    colorManager = m_pEditor->colorManager();
+
+    onionBlue = true;
+    onionRed = true;
+    //onionColor = Qt::blue;
+    toggledOnionColor();
+
+    useGridA = false;
+    useGridB = false;
 }
 
 /************************************************************************************/
@@ -180,25 +163,21 @@ void ScribbleArea::setWidth(const qreal newWidth)
     else if (currentTool()->type() == ERASER)
     {
         getTool(ERASER)->properties.width = newWidth;
-        // update width of tool XXX
         settings.setValue("eraserWidth", newWidth);
     }
     else if (currentTool()->type() == PEN || currentTool()->type() == POLYLINE)
     {
         getTool( PEN )->properties.width = newWidth;
-        // update width of tool XXX
         settings.setValue("penWidth", newWidth);
     }
     else if (currentTool()->type() == BRUSH)
     {
         getTool(BRUSH)->properties.width = newWidth;
-        // update width of tool XXX
         settings.setValue("brushWidth", newWidth);
     }
     else if (currentTool()->type() == SMUDGE)
     {
         getTool(SMUDGE)->properties.width = newWidth;
-        // update width of tool XXX
         settings.setValue("smudgeWidth", newWidth);
     }
     updateAllFrames();
@@ -342,10 +321,10 @@ void ScribbleArea::setHighResPosition(int x)
     if (x == 0)
     {
         m_strokeManager->useHighResPosition(false);
-        settings.setValue("highResPosition", "false");
+        settings.setValue(SETTING_HIGH_RESOLUTION, "false");
     } else {
         m_strokeManager->useHighResPosition(true);
-        settings.setValue("highResPosition", "true");
+        settings.setValue(SETTING_HIGH_RESOLUTION, "true");
     }
 }
 
@@ -550,22 +529,31 @@ void ScribbleArea::keyPressed(QKeyEvent *event)
         // has been handled by tool
         return;
     }
-    // ---- multiple keys ----
-    if ( event->modifiers().testFlag(Qt::ControlModifier))
+
+    ToolType toolType = currentTool()->type();
+
+    // --- fixed control key shortcuts ---
+    if ( event->modifiers() == (Qt::ControlModifier | Qt::ShiftModifier) )
     {
-        if ( event->modifiers().testFlag(Qt::ShiftModifier) ) // [SHIFT][CTRL] temp. eraser
+        qreal width = currentTool()->properties.width;
+        qreal feather = currentTool()->properties.feather;
+        setTemporaryTool( ERASER );
+        m_pEditor->setWidth(width+(200-width)/41); // minimum size: 0.2 + 4.8 = 5 units. maximum size 200 + 0.
+        m_pEditor->setFeather(feather); //anticipates future implementation of feather (not used yet).
+        return;
+    }
+
+    if ( event->modifiers() == Qt::AltModifier )
+    {
+        if ( (toolType == BRUSH) || (toolType == PENCIL) || (toolType == PEN) ||
+             (toolType == BUCKET) || (toolType == POLYLINE) )
         {
-            qreal width = currentTool()->properties.width;
-            qreal feather = currentTool()->properties.feather;
-            setTemporaryTool( ERASER );
-            m_pEditor->setWidth(width+(200-width)/41); // minimum size: 0.2 + 4.8 = 5 units. maximum size 200 + 0.
-            m_pEditor->setFeather(feather); //anticipates future implementation of feather (not used yet).
+            setTemporaryTool( EYEDROPPER );
             return;
         }
-        // more combinations here
     }
-    // ---- single keys ----
-    ToolType toolType = currentTool()->type();
+
+    // ---- fixed normal keys ----
     switch (event->key())
     {
     case Qt::Key_Right:
@@ -661,18 +649,6 @@ void ScribbleArea::keyPressed(QKeyEvent *event)
         gradients = 2;
         updateAllVectorLayersAtCurrentFrame();
         break;
-    case Qt::Key_Alt:
-
-        if ( (toolType == BRUSH) || (toolType == PENCIL) || (toolType == PEN) ||
-             (toolType == BUCKET) || (toolType == POLYLINE) )
-        {
-            setTemporaryTool( EYEDROPPER );
-        }
-        else
-        {
-            event->ignore();
-        }
-        break;
     case Qt::Key_Space:
         setTemporaryTool( HAND ); // just call "setTemporaryTool()" to activate temporarily any tool
         break;
@@ -687,8 +663,9 @@ void ScribbleArea::keyReleaseEvent(QKeyEvent *event)
     if ( mouseInUse ) { return; }
     if ( instantTool ) // temporary tool
     {
-        this->m_pEditor->setTool( prevToolType );
-        instantTool = false;
+        currentTool()->keyReleaseEvent(event);
+        setPrevTool();
+        return;
     }
     if (currentTool()->keyReleaseEvent(event)) {
         // has been handled by tool
@@ -739,8 +716,8 @@ void ScribbleArea::tabletEvent(QTabletEvent *event)
     m_strokeManager->tabletEvent(event);
 
     //qDebug() << event->hiResGlobalPos();
-    currentTool()->adjustPressureSensitiveProperties(m_strokeManager->getPressure(),
-        event->pointerType() == QTabletEvent::Cursor);
+    currentTool()->adjustPressureSensitiveProperties(pow((float)m_strokeManager->getPressure(), 2.0f),
+                                                     event->pointerType() == QTabletEvent::Cursor);
 
     if (event->pointerType() == QTabletEvent::Eraser)
     {
@@ -805,18 +782,32 @@ void ScribbleArea::mousePressEvent(QMouseEvent *event)
         lastPoint = myTempView.inverted(&invertible).map(QPointF(lastPixel));
     }
 
-    // ----- assisted tool adjusment
-    if ( (event->modifiers() == Qt::ShiftModifier) && (currentTool()->properties.width > -1) )
-    {
-        //adjust width if not locked
-        currentTool()->startAdjusting( WIDTH );
-        return;
-    }
-    else if ( (event->modifiers() == Qt::ControlModifier) && (currentTool()->properties.feather>-1) )
-    {
-        //adjust feather if not locked
-        currentTool()->startAdjusting( FEATHER );
-        return;
+    // ----- assisted tool adjusment -- todo: simplify this
+    if ( event->button() == Qt::LeftButton ) {
+        if ( (event->modifiers() == Qt::ShiftModifier) && (currentTool()->properties.width > -1) )
+        {
+            //adjust width if not locked
+            currentTool()->startAdjusting( WIDTH, 1 );
+            return;
+        }
+        if ( (event->modifiers() == Qt::ControlModifier) && (currentTool()->properties.feather>-1) )
+        {
+            //adjust feather if not locked
+            currentTool()->startAdjusting( FEATHER, 1 );
+            return;
+        }
+        if ( (event->modifiers() == (Qt::ShiftModifier | Qt::AltModifier)) && (currentTool()->properties.width > -1) )
+        {
+            //adjust width if not locked
+            currentTool()->startAdjusting( WIDTH, 0 );
+            return;
+        }
+        if ( (event->modifiers() == (Qt::ControlModifier | Qt::AltModifier)) && (currentTool()->properties.feather>-1) )
+        {
+            //adjust feather if not locked
+            currentTool()->startAdjusting( FEATHER, 0 );
+            return;
+        }
     }
 
     // ---- checks layer availability ------
@@ -838,9 +829,9 @@ void ScribbleArea::mousePressEvent(QMouseEvent *event)
     if (!layer->visible && currentTool()->type() != HAND && (event->button() != Qt::RightButton))
     {
         QMessageBox::warning(this, tr("Warning"),
-            tr("You are drawing on a hidden layer! Please select another layer (or make the current layer visible)."),
-            QMessageBox::Ok,
-            QMessageBox::Ok);
+                             tr("You are drawing on a hidden layer! Please select another layer (or make the current layer visible)."),
+                             QMessageBox::Ok,
+                             QMessageBox::Ok);
         mouseInUse = false;
         return;
     }
@@ -955,8 +946,7 @@ void ScribbleArea::mouseReleaseEvent(QMouseEvent *event)
     // ---- last check (at the very bottom of mouseRelease) ----
     if ( instantTool && !keyboardInUse ) // temp tool and released all keys ?
     {
-        this->m_pEditor->setTool( prevToolType ); // abandon temporary tool !
-        instantTool = false;
+        setPrevTool();
     }
 }
 
@@ -1184,7 +1174,8 @@ void ScribbleArea::paintEvent(QPaintEvent *event)
 
                 for (int k = 0; k < closestCurves.size(); k++)
                 {
-                    qreal scale = myTempView.det();
+                    qreal scale = myTempView.det(); //todo: check whether it's correct (det = area?)
+                    //qreal scale = sqrt(myTempView.det()); or qreal scale = sqrt(myTempView.m11()*myTempView.m22());
                     int idx = closestCurves[k];
                     if (vectorImage->curve.size() <= idx)
                     {
@@ -1312,26 +1303,185 @@ void ScribbleArea::updateCanvas(int frame, QRect rect)
     painter.setWorldMatrixEnabled(true);
 
     // background
-    painter.setPen(Qt::NoPen);
+    painter.setPen(Qt::NoPen );
     painter.setBrush(backgroundBrush);
-    painter.drawRect(myTempView.inverted().mapRect(QRect(-2, -2, width() + 3, height() + 3)));  // this is necessary to have the background move with the view
+    painter.drawRect( myTempView.inverted().mapRect(QRect(-2, -2, width() + 3, height() + 3)) );  // this is necessary to have the background move with the view
 
-    // grid
-    bool drawGrid = false;
-    if (drawGrid)
-    {
-        painter.setOpacity(1.0);
-        painter.setPen(Qt::gray);
-        painter.setBrush(Qt::NoBrush);
-        // What kind of grid do we want?
-        //painter.drawRect(QRect(0,0, mySize.width(), mySize.height()));
-        //painter.drawLine( QPoint(0,mySize.height()/2), QPoint(mySize.width(), mySize.height()/2) );
-        //painter.drawLine( QPoint(mySize.width()/3, 0), QPoint(mySize.width()/3, mySize.height()) );
-        //painter.drawLine( QPoint(mySize.width()*2/3, 0), QPoint(mySize.width()*2/3, mySize.height()) );
-    }
+    QRectF viewRect = getViewRect();
+    QRectF vectorViewRect = viewRect.translated(-viewRect.left(),-viewRect.top() );
+    QSize sz = viewRect.size().toSize();
 
     Object *object = m_pEditor->object;
     qreal opacity;
+
+    // --- onionskins ---
+    int iStart=0;
+    int iEnd=object->getLayerCount()-1;
+    if ( multiLayerOnionSkin ) { // not used ( if required, just make a connection from UI )
+        iStart = iEnd = m_pEditor->m_nCurrentLayerIndex;
+    }
+    for (int i = iStart; i <= iEnd; i++)
+    {
+        opacity = 1.0;
+        if (i != m_pEditor->m_nCurrentLayerIndex && (m_showAllLayers == 1)) { opacity = 0.4; }
+        if (m_pEditor->getCurrentLayer()->type == Layer::CAMERA) { opacity = 1.0; }
+        Layer *layer = (object->getLayer(i));
+        if (layer->visible && (m_showAllLayers > 0 || i == m_pEditor->m_nCurrentLayerIndex)) // change && to || for all layers
+        {
+            // paints the bitmap images
+            if (layer->type == Layer::BITMAP)
+            {
+                LayerBitmap *layerBitmap = (LayerBitmap *)layer;
+                BitmapImage *bitmapImage = layerBitmap->getLastBitmapImageAtFrame(frame, 0);
+                if (bitmapImage != NULL)
+                {
+                    painter.setWorldMatrixEnabled(true);
+
+                    // previous frame (onion skin)
+                    if ( onionPrev ) {
+                        BitmapImage *previousImage = layerBitmap->getLastBitmapImageAtFrame(frame, -1);
+                        if (previousImage != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer1Opacity() / 100.0);
+                            previousImage->paintImage(painter);
+                        }
+                        BitmapImage *previousImage2 = layerBitmap->getLastBitmapImageAtFrame(frame, -2);
+                        if (previousImage2 != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer2Opacity() / 100.0);
+                            previousImage2->paintImage(painter);
+                        }
+                        BitmapImage *previousImage3 = layerBitmap->getLastBitmapImageAtFrame(frame, -3);
+                        if (previousImage3 != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer3Opacity() / 100.0);
+                            previousImage3->paintImage(painter);
+                        }
+                        if ( onionBlue || onionRed ) {
+                            painter.setOpacity(1.0);
+                            painter.setCompositionMode(QPainter::CompositionMode_Lighten);
+                            if (onionBlue && onionRed && onionNext ) {
+                                painter.fillRect( viewRect ,Qt::red);
+                            } else {
+                                painter.fillRect( viewRect ,onionColor);
+                            }
+                            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                        }
+                    }
+
+                    // next frame (onion skin)
+                    if ( onionNext ) {
+                        BitmapImage *nextImage = layerBitmap->getLastBitmapImageAtFrame(frame, 1);
+                        if (nextImage != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer1Opacity() / 100.0);
+                            nextImage->paintImage(painter);
+                        }
+                        BitmapImage *nextImage2 = layerBitmap->getLastBitmapImageAtFrame(frame, 2);
+                        if (nextImage2 != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer2Opacity() / 100.0);
+                            nextImage2->paintImage(painter);
+                        }
+                        BitmapImage *nextImage3 = layerBitmap->getLastBitmapImageAtFrame(frame, 3);
+                        if (nextImage3 != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer3Opacity() / 100.0);
+                            nextImage3->paintImage(painter);
+                        }
+                        if ( onionBlue || onionRed ) {
+                            painter.setOpacity(1.0);
+                            painter.setCompositionMode(QPainter::CompositionMode_Lighten);
+                            if (onionBlue && onionRed && onionPrev) {
+                                painter.fillRect( viewRect ,Qt::blue);
+                            } else {
+                                painter.fillRect( viewRect ,onionColor);
+                            }
+                            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                        }
+                    }
+                }
+            }
+
+            // paints the vector images onion skins
+            if (layer->type == Layer::VECTOR)
+            {
+                LayerVector *layerVector = (LayerVector *)layer;
+                QImage *image = layerVector->getLastImageAtFrame(frame, 0, sz, simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
+
+                if (image != NULL)
+                {
+                    painter.setWorldMatrixEnabled(false);
+
+                    // previous frame (onion skin)
+                    if (onionPrev) {
+                        QImage *previousImage = layerVector->getLastImageAtFrame(frame, -1, sz, simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
+                        if (previousImage != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer1Opacity() / 100.0);
+                            painter.drawImage(QPoint(0, 0), *previousImage);
+                        }
+                        QImage *previousImage2 = layerVector->getLastImageAtFrame(frame, -2, sz, simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
+                        if (previousImage2 != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer2Opacity() / 100.0);
+                            painter.drawImage(QPoint(0, 0), *previousImage2);
+                        }
+                        QImage *previousImage3 = layerVector->getLastImageAtFrame(frame, -3, sz, simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
+                        if (previousImage3 != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer3Opacity() / 100.0);
+                            painter.drawImage(QPoint(0, 0), *previousImage3);
+                        }
+                        if ( onionBlue || onionRed ) {
+                            painter.setOpacity(1.0);
+                            painter.setCompositionMode(QPainter::CompositionMode_Lighten);
+                            if (onionBlue && onionRed && onionNext) {
+                                painter.fillRect( vectorViewRect ,Qt::red);
+                            } else {
+                                painter.fillRect( vectorViewRect ,onionColor);
+                            }
+                            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                        }
+                    }
+
+                    // next frame (onion skin)
+                    if (onionNext) {
+                        QImage *nextImage = layerVector->getLastImageAtFrame(frame, 1, sz, simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
+                        if (nextImage != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer1Opacity() / 100.0);
+                            painter.drawImage(QPoint(0, 0), *nextImage);
+                        }
+                        QImage *nextImage2 = layerVector->getLastImageAtFrame(frame, 2, sz, simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
+                        if (nextImage2 != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer2Opacity() / 100.0);
+                            painter.drawImage(QPoint(0, 0), *nextImage2);
+                        }
+                        QImage *nextImage3 = layerVector->getLastImageAtFrame(frame, 3, sz, simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
+                        if (nextImage3 != NULL)
+                        {
+                            painter.setOpacity(opacity * m_pEditor->getOnionLayer3Opacity() / 100.0);
+                            painter.drawImage(QPoint(0, 0), *nextImage3);
+                        }
+                        if ( onionBlue || onionRed ) {
+                            painter.setOpacity(1.0);
+                            painter.setCompositionMode(QPainter::CompositionMode_Lighten);
+                            if (onionBlue && onionRed && onionPrev) {
+                                painter.fillRect( vectorViewRect ,Qt::blue);
+                            } else {
+                                painter.fillRect( vectorViewRect ,onionColor);
+                            }
+                            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                        }
+                    }
+                }
+            }
+        }
+    } // --- end onion skins
+
+    // --- current frame ---
     for (int i = 0; i < object->getLayerCount(); i++)
     {
         opacity = 1.0;
@@ -1348,48 +1498,6 @@ void ScribbleArea::updateCanvas(int frame, QRect rect)
                 if (bitmapImage != NULL)
                 {
                     painter.setWorldMatrixEnabled(true);
-
-                    // previous frame (onion skin)
-                    BitmapImage *previousImage = layerBitmap->getLastBitmapImageAtFrame(frame, -1);
-                    if (previousImage != NULL && onionPrev)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer1Opacity() / 100.0);
-                        previousImage->paintImage(painter);
-                    }
-                    BitmapImage *previousImage2 = layerBitmap->getLastBitmapImageAtFrame(frame, -2);
-                    if (previousImage2 != NULL && onionPrev)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer2Opacity() / 100.0);
-                        previousImage2->paintImage(painter);
-                    }
-                    BitmapImage *previousImage3 = layerBitmap->getLastBitmapImageAtFrame(frame, -3);
-                    if (previousImage3 != NULL && onionPrev)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer3Opacity() / 100.0);
-                        previousImage3->paintImage(painter);
-                    }
-
-                    // next frame (onion skin)
-                    BitmapImage *nextImage = layerBitmap->getLastBitmapImageAtFrame(frame, 1);
-                    if (nextImage != NULL && onionNext)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer1Opacity() / 100.0);
-                        nextImage->paintImage(painter);
-                    }
-                    BitmapImage *nextImage2 = layerBitmap->getLastBitmapImageAtFrame(frame, 2);
-                    if (nextImage2 != NULL && onionNext)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer2Opacity() / 100.0);
-                        nextImage2->paintImage(painter);
-                    }
-                    BitmapImage *nextImage3 = layerBitmap->getLastBitmapImageAtFrame(frame, 3);
-                    if (nextImage3 != NULL && onionNext)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer3Opacity() / 100.0);
-                        nextImage3->paintImage(painter);
-                    }
-
-                    // current frame
                     painter.setOpacity(opacity);
                     if (i == m_pEditor->m_nCurrentLayerIndex && somethingSelected && ( myRotatedAngle != 0 || myTempTransformedSelection != mySelection))
                     {
@@ -1413,7 +1521,7 @@ void ScribbleArea::updateCanvas(int frame, QRect rect)
                         rm.rotate(myRotatedAngle);
                         QImage rotImg = selectionClip.image->transformed( rm );
                         QPoint dxy = QPoint( ( myTempTransformedSelection.width()-rotImg.rect().width() ) / 2,
-                                            ( myTempTransformedSelection.height()-rotImg.rect().height() ) / 2 );
+                                             ( myTempTransformedSelection.height()-rotImg.rect().height() ) / 2 );
                         *selectionClip.image = rotImg; // TODO: find/create a func. (*object = data is not very orthodox)
                         selectionClip.boundaries.translate( dxy );
                         selectionClip.paintImage(painter);
@@ -1441,58 +1549,70 @@ void ScribbleArea::updateCanvas(int frame, QRect rect)
                     vectorImage->setSelectionTransformation(selectionTransformation);
                     //vectorImage->setTransformedSelection(myTempTransformedSelection);
                 }
-                QImage *image = layerVector->getLastImageAtFrame(frame, 0, size(), simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
+                QImage *image = layerVector->getLastImageAtFrame(frame, 0, sz, simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
                 if (image != NULL)
                 {
                     painter.setWorldMatrixEnabled(false);
-
-                    // previous frame (onion skin)
-                    QImage *previousImage = layerVector->getLastImageAtFrame(frame, -1, size(), simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
-                    if (previousImage != NULL && onionPrev)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer1Opacity() / 100.0);
-                        painter.drawImage(QPoint(0, 0), *previousImage);
-                    }
-                    QImage *previousImage2 = layerVector->getLastImageAtFrame(frame, -2, size(), simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
-                    if (previousImage2 != NULL && onionPrev)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer2Opacity() / 100.0);
-                        painter.drawImage(QPoint(0, 0), *previousImage2);
-                    }
-                    QImage *previousImage3 = layerVector->getLastImageAtFrame(frame, -3, size(), simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
-                    if (previousImage3 != NULL && onionPrev)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer3Opacity() / 100.0);
-                        painter.drawImage(QPoint(0, 0), *previousImage3);
-                    }
-
-                    // next frame (onion skin)
-                    QImage *nextImage = layerVector->getLastImageAtFrame(frame, 1, size(), simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
-                    if (nextImage != NULL && onionNext)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer1Opacity() / 100.0);
-                        painter.drawImage(QPoint(0, 0), *nextImage);
-                    }
-                    QImage *nextImage2 = layerVector->getLastImageAtFrame(frame, 2, size(), simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
-                    if (nextImage2 != NULL && onionNext)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer2Opacity() / 100.0);
-                        painter.drawImage(QPoint(0, 0), *nextImage2);
-                    }
-                    QImage *nextImage3 = layerVector->getLastImageAtFrame(frame, 3, size(), simplified, m_showThinLines, curveOpacity, m_antialiasing, gradients);
-                    if (nextImage3 != NULL && onionNext)
-                    {
-                        painter.setOpacity(opacity * m_pEditor->getOnionLayer3Opacity() / 100.0);
-                        painter.drawImage(QPoint(0, 0), *nextImage3);
-                    }
-
-                    // current frame
                     painter.setOpacity(opacity);
                     painter.drawImage(QPoint(0, 0), *image);
                 }
             }
         }
     }
+
+    // --- grids ---
+    if ( m_pEditor->getCurrentLayer() != NULL )
+    {
+        if ( m_pEditor->getCurrentLayer()->type == Layer::BITMAP ||
+             m_pEditor->getCurrentLayer()->type == Layer::VECTOR)
+        {
+            painter.setWorldMatrixEnabled(true);
+            painter.setPen(Qt::magenta);
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRect( viewRect.left(), viewRect.top(), viewRect.width(), viewRect.height() );
+            // What kind of grid do we want?
+            QPen pen(Qt::gray );
+            qreal factorY = viewRect.height()/24.0f;
+            qreal factorX = viewRect.width()/24.0f;
+            if (useGridA)
+            {
+                painter.setOpacity(0.5);
+                painter.setPen(Qt::magenta);
+                painter.drawLine( viewRect.left(),0,viewRect.right(),0);
+                for (int y=1; y<12; y++){
+                    if ( y % 3 == 0 )
+                    { painter.setPen(Qt::gray); }
+                    else
+                    { painter.setPen(Qt::lightGray); }
+                    painter.drawLine( viewRect.left(),y*factorY,viewRect.right(),y*factorY );
+                    painter.drawLine( viewRect.left(),-y*factorY,viewRect.right(),-y*factorY );
+                }
+                // vertical lines
+                painter.setPen(Qt::magenta);
+                painter.drawLine( 0,viewRect.top(),0,viewRect.bottom());
+                for (int x=1; x<12; x++){
+                    if ( x % 3 == 0 )
+                    { painter.setPen(Qt::gray); }
+                    else
+                    { painter.setPen(Qt::lightGray); }
+                    painter.drawLine( x*factorX,viewRect.top(),x*factorX,viewRect.bottom());
+                    painter.drawLine( -x*factorX,viewRect.top(),-x*factorX,viewRect.bottom());
+                }
+                if (useGridB)
+                {
+                    //painter.setOpacity(0.5);
+                    painter.setPen( Qt::gray );
+                    for (int n=1; n<12; n++){
+                        painter.drawText(n*factorX, n*factorY, QString("%2").arg(n));
+                        painter.drawText(-n*factorX, n*factorY, QString("%2").arg(n));
+                        painter.drawText(n*factorX, -n*factorY, QString("%2").arg(n));
+                        painter.drawText(-n*factorX, -n*factorY, QString("%2").arg(n));
+                    }
+                }
+            }
+        }
+    }
+    // --- eo grids
     painter.end();
 }
 
@@ -1515,6 +1635,7 @@ void ScribbleArea::setGaussianGradient(QGradient &gradient, QColor colour, qreal
     gradient.setColorAt(offset + 0.9 * (1.0 - offset), QColor(r, g, b, qRound(a * 10 * opacity)));
     gradient.setColorAt(offset + 1.0 * (1.0 - offset), QColor(r, g, b, 0));
 }
+
 
 void ScribbleArea::drawBrush(QPointF thePoint, qreal brushWidth, qreal offset, QColor fillColour, qreal opacity)
 {
@@ -1579,14 +1700,12 @@ void ScribbleArea::blurBrush( BitmapImage *bmiSource_, QPointF srcPoint_, QPoint
     QRectF trgRect( thePoint_.x() - 0.5 * brushWidth_, thePoint_.y() - 0.5 * brushWidth_, brushWidth_, brushWidth_ );
 
     BitmapImage bmiSrcClip = bmiSource_->copy( srcRect.toRect() );
-    //BitmapImage *bmiTmpClip = new BitmapImage( NULL );
-    BitmapImage bmiTmpClip = bmiSource_->copy( srcRect.toRect() );
+    BitmapImage bmiTmpClip = bmiSrcClip; // todo: find a shorter way
 
     bmiTmpClip.drawRect( srcRect, Qt::NoPen, radialGrad, QPainter::CompositionMode_Source, m_antialiasing );
     bmiSrcClip.boundaries.moveTo( trgRect.topLeft().toPoint() );
     bmiTmpClip.paste( &bmiSrcClip, QPainter::CompositionMode_SourceAtop );
     bufferImg->paste( &bmiTmpClip );
-    //delete bmiTmpClip;
 }
 
 void ScribbleArea::liquifyBrush(BitmapImage *bmiSource_, QPointF srcPoint_, QPointF thePoint_, qreal brushWidth_, qreal offset_, qreal opacity_)
@@ -1602,7 +1721,7 @@ void ScribbleArea::liquifyBrush(BitmapImage *bmiSource_, QPointF srcPoint_, QPoi
     bmiTmpClip->drawRect( trgRect, Qt::NoPen, radialGrad, QPainter::CompositionMode_Source, m_antialiasing );
 
     // Slide texture/pixels of the source image
-    qreal factor;
+    qreal factor, factorGrad;
     int xb, yb, xa, ya;
 
     for (yb=bmiTmpClip->boundaries.top(); yb<bmiTmpClip->boundaries.bottom(); yb++)
@@ -1611,24 +1730,29 @@ void ScribbleArea::liquifyBrush(BitmapImage *bmiSource_, QPointF srcPoint_, QPoi
         {
             QColor color;
             color.setRgba( bmiTmpClip->pixel (xb, yb) );
-            factor = color.alphaF(); // any from r g b a is ok
+            factorGrad = color.alphaF(); // any from r g b a is ok
 
-            xa = xb-factor*delta.x();
-            ya = yb-factor*delta.y();
+            xa = xb-factorGrad*delta.x();
+            ya = yb-factorGrad*delta.y();
 
             color.setRgba( bmiSource_->pixel( xa, ya ) );
             factor = color.alphaF();
 
             if (factor>0.0)
             {
-                //qreal invFactor = 1.0/factor; // TODO: almost done, use inverse factor instead of sum
-                int sum = 255-color.alpha();
-                color.setRed( color.red() + sum );
-                color.setGreen( color.green() + sum );
-                color.setBlue( color.blue() + sum );
+                color.setRed( color.red()/factor );
+                color.setGreen( color.green()/factor );
+                color.setBlue( color.blue()/factor );
                 color.setAlpha( 255 ); // Premultiplied color
 
+                color.setRed( color.red()*factorGrad );
+                color.setGreen( color.green()*factorGrad );
+                color.setBlue( color.blue()*factorGrad );
+                color.setAlpha( 255*factorGrad ); // Premultiplied color
+
                 bmiTmpClip->setPixel( xb, yb, color.rgba() );
+            } else {
+                bmiTmpClip->setPixel( xb, yb, qRgba(255,255,255,255) );
             }
         }
     }
@@ -1646,10 +1770,10 @@ void ScribbleArea::drawPolyline(QList<QPointF> points, QPointF endPoint)
     if (points.size() > 0)
     {
         QPen pen2(m_pEditor->colorManager()->frontColor(),
-            getTool( PEN )->properties.width,
-            Qt::SolidLine,
-            Qt::RoundCap,
-            Qt::RoundJoin);
+                  getTool( PEN )->properties.width,
+                  Qt::SolidLine,
+                  Qt::RoundCap,
+                  Qt::RoundJoin);
         QPainterPath tempPath = BezierCurve(points).getSimplePath();
         tempPath.lineTo(endPoint);
         QRect updateRect = myTempView.mapRect(tempPath.boundingRect().toRect()).adjusted(-10, -10, 10, 10);
@@ -1912,8 +2036,8 @@ void ScribbleArea::paintTransformedSelection()
             if (bitmapImage == NULL)
             {
                 qDebug() << "NULL image pointer!"
-                    << m_pEditor->m_nCurrentLayerIndex
-                    << m_pEditor->m_nCurrentFrameIndex;
+                         << m_pEditor->m_nCurrentLayerIndex
+                         << m_pEditor->m_nCurrentFrameIndex;
                 return;
             }
 
@@ -1925,7 +2049,7 @@ void ScribbleArea::paintTransformedSelection()
             selectionClip.transform(myTransformedSelection, smoothTransform);
             QImage rotImg = selectionClip.image->transformed( rm, Qt::SmoothTransformation );
             QPoint dxy = QPoint( ( myTempTransformedSelection.width()-rotImg.rect().width() ) / 2,
-                                ( myTempTransformedSelection.height()-rotImg.rect().height() ) / 2 );
+                                 ( myTempTransformedSelection.height()-rotImg.rect().height() ) / 2 );
             *selectionClip.image = rotImg; // TODO: find/create a func. (*object = data is not very orthodox)
             selectionClip.boundaries.translate( dxy );
             bitmapImage->clear(mySelection.toRect());
@@ -2027,9 +2151,7 @@ void ScribbleArea::deselectAll()
     vectorSelection.clear();
 
     // clear all the data tools may have accumulated
-    foreach (BaseTool *tool, getTools()) {
-        tool->clear();
-    }
+    getEditor()->toolManager()->cleanupAllToolsData();
 
     updateFrame();
 }
@@ -2046,6 +2168,45 @@ void ScribbleArea::toggleOnionPrev(bool checked)
     onionPrev = checked;
     updateAllFrames();
     emit onionPrevChanged(onionPrev);
+}
+
+void ScribbleArea::toggledOnionColor()
+{
+    if (onionBlue) {
+        if (onionRed) {
+            onionColor = QColor(232,48,255,255); // subtle violet ( blue + red )
+        } else {
+            onionColor = Qt::blue;
+        }
+    } else if (onionRed) {
+        onionColor = Qt::red;
+    }
+}
+
+void ScribbleArea::toggleOnionBlue(bool checked)
+{
+    onionBlue = checked;
+    toggledOnionColor();
+    updateAllFrames();
+}
+
+void ScribbleArea::toggleOnionRed(bool checked)
+{
+    onionRed = checked;
+    toggledOnionColor();
+    updateAllFrames();
+}
+
+void ScribbleArea::toggleGridA(bool checked)
+{
+    useGridA = checked;
+    updateAllFrames();
+}
+
+void ScribbleArea::toggleGridB(bool checked)
+{
+    useGridB = checked;
+    updateAllFrames();
 }
 
 void ScribbleArea::floodFill(VectorImage *vectorImage, QPoint point, QRgb targetColour, QRgb replacementColour, int tolerance)
@@ -2369,8 +2530,8 @@ void ScribbleArea::floodFillError(int errorType)
     QString message, error;
     if (errorType == 1) { message = "There is a gap in your drawing (or maybe you have zoomed too much)."; }
     if (errorType == 2 || errorType == 3) message = "Sorry! This doesn't always work."
-        "Please try again (zoom a bit, click at another location... )<br>"
-        "if it doesn't work, zoom a bit and check that your paths are connected by pressing F1.).";
+            "Please try again (zoom a bit, click at another location... )<br>"
+            "if it doesn't work, zoom a bit and check that your paths are connected by pressing F1.).";
 
     if (errorType == 1) { error = "Out of bound."; }
     if (errorType == 2) { error = "Could not find a closed path."; }
@@ -2385,12 +2546,12 @@ void ScribbleArea::floodFillError(int errorType)
 
 BaseTool *ScribbleArea::currentTool()
 {
-    return m_currentTool;
+    return getEditor()->toolManager()->currentTool();
 }
 
-BaseTool *ScribbleArea::getTool(ToolType eToolMode)
+BaseTool* ScribbleArea::getTool(ToolType eToolType)
 {
-    return m_toolSetHash.value(eToolMode);
+    return getEditor()->toolManager()->getTool( eToolType );
 }
 
 void ScribbleArea::setCurrentTool(ToolType eToolMode)
@@ -2405,27 +2566,28 @@ void ScribbleArea::setCurrentTool(ToolType eToolMode)
         }
 
         // XXX tool->setActive()
-        if (currentTool()->type() == MOVE) {
+        if (currentTool()->type() == MOVE)
+        {
             paintTransformedSelection();
             deselectAll();
         }
-        if (currentTool()->type() == POLYLINE)
+        else if (currentTool()->type() == POLYLINE)
         {
             escape();
         }
     }
-    m_currentTool = getTool(eToolMode);
+    getEditor()->toolManager()->setCurrentTool(eToolMode);
 
     // --- change cursor ---
-    setCursor(m_currentTool->cursor());
+    setCursor(currentTool()->cursor());
     qDebug() << "fn: setCurrentTool " << "call: setCursor()" << "current tool" << currentTool()->typeName();
 }
 
 void ScribbleArea::setTemporaryTool(ToolType eToolMode)
 {
     instantTool = true; // used to return to previous tool when finished (keyRelease).
-    prevToolType = currentTool()->type();
-    this->m_pEditor->setTool( eToolMode );
+    prevMode = currentTool()->type();
+    switchTool( eToolMode ); // emits for each case
 }
 
 void ScribbleArea::switchTool(ToolType type)
@@ -2468,11 +2630,6 @@ void ScribbleArea::switchTool(ToolType type)
     default:
         break;
     }
-}
-
-QList<BaseTool *> ScribbleArea::getTools()
-{
-    return m_toolSetHash.values();
 }
 
 void ScribbleArea::deleteSelection()
@@ -2554,6 +2711,7 @@ void ScribbleArea::toggleShowAllLayers()
     {
         m_showAllLayers = 0;
     }
+    //m_showAllLayers = ( m_showAllLayers + 1 ) % 3; // 0 1 2 repeated todo: subst. prev. lines
     //emit showAllLayersChanged(showAllLayers);
     setView(myView);
     updateAllFrames();
@@ -2563,4 +2721,5 @@ void ScribbleArea::setPrevTool()
 {
     setCurrentTool(prevMode);
     switchTool(prevMode);
+    instantTool = false;
 }

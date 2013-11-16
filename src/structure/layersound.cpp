@@ -16,8 +16,7 @@ GNU General Public License for more details.
 #include <QtDebug>
 #include "layersound.h"
 #include "object.h"
-#include <phonon>
-//#include "unistd.h"
+
 
 LayerSound::LayerSound(Object* object) : LayerImage(object)
 {
@@ -256,7 +255,7 @@ QDomElement LayerSound::createDomElement(QDomDocument& doc)
     return layerTag;
 }
 
-void LayerSound::loadDomElement(QDomElement element, QString filePath)
+void LayerSound::loadDomElement(QDomElement element, QString dataDirPath)
 {
     if (!element.attribute("id").isNull()) id = element.attribute("id").toInt();
     name = element.attribute("name");
@@ -271,7 +270,8 @@ void LayerSound::loadDomElement(QDomElement element, QString filePath)
         {
             if (soundElement.tagName() == "sound")
             {
-                QString path = filePath + ".data/" + soundElement.attribute("src"); // the file is supposed to be in the data directory
+                QString path = dataDirPath + "/" + soundElement.attribute("src"); // the file is supposed to be in the data directory
+     //qDebug() << "LAY_SOUND  dataDirPath=" << dataDirPath << "   ;path=" << path;  //added for debugging puproses
                 QFileInfo fi(path);
                 if (!fi.exists()) path = soundElement.attribute("src");
                 int position = soundElement.attribute("position").toInt();

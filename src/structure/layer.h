@@ -53,7 +53,7 @@ public:
     // export element
     virtual QDomElement createDomElement(QDomDocument& doc); // constructs an dom/xml representation of the layer for the document doc
     virtual void loadDomElement(QDomElement element); // construct a layer from a dom/xml representation
-    virtual void loadDomElement(QDomElement element, QString filePath) = 0;
+    virtual void loadDomElement(QDomElement element, QString dataDirPath) = 0;
 
     // graphic representation -- could be put in another class
     virtual void paintTrack(QPainter& painter, TimeLineCells* cells, int x, int y, int height, int width, bool selected, int frameSize);
@@ -67,7 +67,15 @@ public:
     virtual void editProperties();
 
 public:
-    enum types { UNDEFINED, BITMAP, VECTOR, MOVIE, SOUND, CAMERA };
+    enum types
+    {
+        UNDEFINED = 0,
+        BITMAP = 1,
+        VECTOR = 2,
+        MOVIE = 3,
+        SOUND = 4,
+        CAMERA = 5
+    };
 };
 
 #endif

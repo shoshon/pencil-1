@@ -28,12 +28,12 @@ GNU General Public License for more details.
 #include "layersound.h"
 #include "layerbitmap.h"
 #include "layervector.h"
+#include "objectsaveloader.h"
 
 #include "editor.h"
 #include "colormanager.h"
 
 #include "scribblearea.h"
-#include "interfaces.h"
 #include "colorpalettewidget.h"
 #include "displayoptiondockwidget.h"
 #include "tooloptiondockwidget.h"
@@ -44,6 +44,8 @@ GNU General Public License for more details.
 #include "colorbox.h"
 #include "util.h"
 
+#include "fileformat.h"		//contains constants used by Pencil File Format
+#include "JlCompress.h"		//compress and decompress New Pencil File Format
 #include "recentfilemenu.h"
 
 #include "mainwindow2.h"
@@ -81,6 +83,9 @@ MainWindow2::MainWindow2(QWidget *parent) :
     connect(editor, SIGNAL(needSave()), this, SLOT(saveDocument()));
     connect(m_toolSet, SIGNAL(clearButtonClicked()), editor, SLOT(clearCurrentFrame()));
     connect(editor, SIGNAL(changeTool(ToolType)), m_toolSet, SLOT(setCurrentTool(ToolType)));        
+
+    editor->setCurrentLayer( this->editor->object->getLayerCount()-1 );
+
 }
 
 MainWindow2::~MainWindow2()
@@ -294,22 +299,6 @@ void MainWindow2::addToMenu(QObject* plugin, const QString text, QMenu* menu, co
     }
 }
 
-void MainWindow2::exportFile()
-{
-    QAction* action = qobject_cast<QAction*>(sender());
-    ExportInterface* exportPlugin = qobject_cast<ExportInterface*>(action->parent());
-    if (exportPlugin)
-    {
-        //exportPlugin->exportFile();
-    }
-    else
-    {
-        qDebug() << "exportPlugin is null";
-    }
-    //const QImage image = iFilter->filterImage(action->text(), paintArea->image(), this);
-    //paintArea->setImage(image);
-}
-
 void MainWindow2::setOpacity(int opacity)
 {
     QSettings settings("Pencil","Pencil");
@@ -366,7 +355,7 @@ void MainWindow2::openDocument()
                     this,
                     tr("Open File..."),
                     myPath,
-                    tr("PCL (*.pcl);;Any files (*)"));
+                    tr(PFF_OPEN_ALL_FILE_FILTER));
 
         if (fileName.isEmpty())
         {
@@ -402,10 +391,10 @@ bool MainWindow2::saveAsNewDocument()
 
     if (strDefaultFileName.isEmpty())
     {
-        strDefaultFileName = QDir::homePath() + "/untitled.pcl";
+        strDefaultFileName = QDir::homePath() + "/" + PFF_DEFAULT_FILENAME;
     }
 
-    QString fileName = QFileDialog::getSaveFileName(this, tr("Save As..."),strDefaultFileName ,tr("PCL (*.pcl)"));
+    QString fileName = QFileDialog::getSaveFileName(this, tr("Save As..."),strDefaultFileName ,tr(PFF_CLOSE_ALL_FILE_FILTER));
 
     if (fileName.isEmpty())
     {
@@ -413,9 +402,9 @@ bool MainWindow2::saveAsNewDocument()
     }
     else
     {
-        if (! fileName.endsWith(".pcl"))
+        if ( ! fileName.endsWith(PFF_OLD_EXTENSION) && ! fileName.endsWith(PFF_EXTENSION) )
         {
-            fileName =  fileName + ".pcl";
+            fileName =  fileName + PFF_EXTENSION;
         }
         QSettings settings("Pencil","Pencil");
         settings.setValue("lastFilePath", QVariant(fileName));
@@ -426,7 +415,6 @@ bool MainWindow2::saveAsNewDocument()
 
 void MainWindow2::openFile(QString filename)
 {
-    QSettings settings("Pencil","Pencil");
     qDebug() << "open recent file" << filename;
     bool ok = openObject(filename);
     if ( !ok )
@@ -444,114 +432,40 @@ void MainWindow2::openFile(QString filename)
     }
 }
 
-bool MainWindow2::openObject(QString filePath)
+bool MainWindow2::openObject(QString strFilePath)
 {
-    // ---- test before opening ----
-    QScopedPointer<QFile> file(new QFile(filePath));
-
-    //QFile* file = new QFile(filePath);
-    if (!file->open(QFile::ReadOnly))
-    {
-        return false;
-    }
-
-    QDomDocument doc;
-    if (!doc.setContent(file.data()))
-    {
-        return false; // this is not a XML file
-    }
-    QDomDocumentType type = doc.doctype();
-    if (type.name() != "PencilDocument" && type.name() != "MyObject")
-    {
-        return false; // this is not a Pencil document
-    }
-
-    // delete old object
-    if (m_object != NULL)
-    {
-        m_object->deleteLater();
-    }
-
-    // -----------------------------
-
     QProgressDialog progress("Opening document...", "Abort", 0, 100, this);
     progress.setWindowModality(Qt::WindowModal);
     progress.show();
 
-    //QSettings settings("Pencil","Pencil");
-    //settings.setValue("lastFilePath", QVariant(object->strCurrentFilePath) );
+    ObjectSaveLoader objectLoader(this);
+    Object* pObject = objectLoader.loadFromFile( strFilePath );
 
-    Object* newObject = new Object();
-    if (!newObject->loadPalette(filePath+".data"))
+    if ( pObject != NULL && objectLoader.error().code() == PCL_OK )
     {
-        newObject->loadDefaultPalette();
+        SafeDelete( m_object );
+        m_object = pObject;
+
+        pObject->setFilePath( strFilePath );
+        QSettings settings("Pencil","Pencil");
+        settings.setValue("lastFilePath", QVariant(pObject->filePath()) );
+
+        editor->setObject(pObject);
+        editor->updateObject();
+
+        m_recentFileMenu->addRecentFile( pObject->filePath() );
+        m_recentFileMenu->saveToDisk();
+
+        qDebug() << "Current File Path=" << pObject->filePath();
+        setWindowTitle( pObject->filePath() );
     }
-    editor->setObject(newObject);
-
-    newObject->strCurrentFilePath = filePath;
-
-    // ------- reads the XML file -------
-    bool ok = true;
-    int prog = 0;
-    QDomElement docElem = doc.documentElement();
-    if (docElem.isNull())
+    else
     {
         return false;
     }
 
-    if (docElem.tagName() == "document")
-    {
-        qDebug("Object Loader: start.");
-
-        QDomNode tag = docElem.firstChild();
-        while (!tag.isNull())
-        {
-            QDomElement element = tag.toElement(); // try to convert the node to an element.
-            if (!element.isNull())
-            {
-                prog += std::min(prog + 10, 100);
-                progress.setValue(prog);
-
-                if (element.tagName() == "editor")
-                {
-                    qDebug("  Load editor");
-                    loadDomElement(element, filePath);
-                }
-                else if (element.tagName() == "object")
-                {
-                    qDebug("  Load object");
-                    ok = newObject->loadDomElement(element, filePath);
-                    qDebug() << "    filePath:" << filePath;
-                }
-            }
-            tag = tag.nextSibling();
-        }
-    }
-    else
-    {
-        if (docElem.tagName() == "object" || docElem.tagName() == "MyOject")   // old Pencil format (<=0.4.3)
-        {
-            ok = newObject->loadDomElement(docElem, filePath);
-        }
-    }
-
-    // ------------------------------
-    if (ok)
-    {
-        editor->updateObject();
-
-        m_recentFileMenu->addRecentFile(filePath);
-        m_recentFileMenu->saveToDisk();
-
-        qDebug() << "Current File Path=" << newObject->strCurrentFilePath;
-        setWindowTitle(newObject->strCurrentFilePath);
-
-        // FIXME: need to free the old object. but delete object will crash app, don't know why.
-        m_object = newObject;
-    }
-
     progress.setValue(100);
-    return ok;
+    return true;
 }
 
 // Added here (mainWindow2) to be easily located
@@ -560,64 +474,51 @@ void MainWindow2::resetToolsSettings()
 {
     m_pScribbleArea->resetTools();
     editor->setTool(m_pScribbleArea->currentTool()->type());
+
     qDebug("tools restored to default settings");
 }
 
-// TODO: need to move to other place
-bool MainWindow2::loadDomElement(QDomElement docElem, QString filePath)
-{
-    Q_UNUSED(filePath);
-
-    if (docElem.isNull()) return false;
-    QDomNode tag = docElem.firstChild();
-    while (!tag.isNull())
-    {
-        QDomElement element = tag.toElement(); // try to convert the node to an element.
-        if (!element.isNull())
-        {
-            if (element.tagName() == "currentLayer")
-            {
-                int nCurrentLayerIndex = element.attribute("value").toInt();
-                editor->setCurrentLayer(nCurrentLayerIndex);
-            }
-            if (element.tagName() == "currentFrame")
-            {
-                editor->m_nCurrentFrameIndex = element.attribute("value").toInt();
-            }
-            if (element.tagName() == "currentFps")
-            {
-                editor->fps = element.attribute("value").toInt();
-                //timer->setInterval(1000/fps);
-                m_pTimeLine->setFps(editor->fps);
-            }
-            if (element.tagName() == "currentView")
-            {
-                qreal m11 = element.attribute("m11").toDouble();
-                qreal m12 = element.attribute("m12").toDouble();
-                qreal m21 = element.attribute("m21").toDouble();
-                qreal m22 = element.attribute("m22").toDouble();
-                qreal dx = element.attribute("dx").toDouble();
-                qreal dy = element.attribute("dy").toDouble();
-                m_pScribbleArea->setMyView( QMatrix(m11,m12,m21,m22,dx,dy) );
-            }
-        }
-        tag = tag.nextSibling();
-    }
-    return true;
-}
 
 bool MainWindow2::saveObject(QString strSavedFilename)
 {
     QString filePath = strSavedFilename;
 
+	bool savingTheOLDWAY = filePath.endsWith(PFF_OLD_EXTENSION);
+	
     QFileInfo fileInfo(filePath);
     if (fileInfo.isDir()) return false;
+    
+    QString tmpFilePath;
+    if (!savingTheOLDWAY)
+    {// create temporary directory for compressing files
+		tmpFilePath = QDir::tempPath() + "/" + fileInfo.completeBaseName() + PFF_TMP_COMPRESS_EXT;
+		QFileInfo tmpDataInfo(tmpFilePath);
+		if(!tmpDataInfo.exists())
+		{
+			QDir dir(QDir::tempPath()); // --the directory where filePath is or will be saved
+			dir.mkpath(tmpFilePath); // --creates a directory with the same name +".data"
+		}
+	}
+	else
+	{
+		tmpFilePath = fileInfo.absolutePath();
+	}
 
-    QFileInfo dataInfo(filePath+".data");
+	
+    QString dataLayersDir;
+    if (savingTheOLDWAY)
+    {
+		dataLayersDir = filePath + "." + PFF_LAYERS_DIR;
+	}
+	else
+	{
+		dataLayersDir = tmpFilePath + "/" + PFF_LAYERS_DIR;
+	}
+    QFileInfo dataInfo(dataLayersDir);
     if (!dataInfo.exists())
     {
-        QDir dir(fileInfo.absolutePath()); // the directory where filePath is or will be saved
-        dir.mkpath(filePath+".data"); // creates a directory with the same name +".data"
+        QDir dir(tmpFilePath); // the directory where filePath is or will be saved
+        dir.mkpath(dataLayersDir); // creates a directory with the same name +".data"
     }
 
     //savedName = filePath;
@@ -639,16 +540,25 @@ bool MainWindow2::saveObject(QString strSavedFilename)
 
         progressValue = (i * 100) / nLayers;
         progress.setValue(progressValue);
-        if (layer->type == Layer::BITMAP) ((LayerBitmap*)layer)->saveImages(filePath+".data", i);
-        if (layer->type == Layer::VECTOR) ((LayerVector*)layer)->saveImages(filePath+".data", i);
-        if (layer->type == Layer::SOUND) ((LayerSound*)layer)->saveImages(filePath+".data", i);
+        if (layer->type == Layer::BITMAP) ((LayerBitmap*)layer)->saveImages(dataLayersDir, i);
+        if (layer->type == Layer::VECTOR) ((LayerVector*)layer)->saveImages(dataLayersDir, i);
+        if (layer->type == Layer::SOUND) ((LayerSound*)layer)->saveImages(dataLayersDir, i);
     }
 
     // save palette
-    m_object->savePalette(filePath+".data");
+    m_object->savePalette(dataLayersDir);
 
     // -------- save main XML file -----------
-    QFile* file = new QFile(filePath);
+    QString mainXMLfile;
+    if (!savingTheOLDWAY)
+    {
+		mainXMLfile = tmpFilePath + "/" + PFF_XML_FILE_NAME;
+	}
+	else
+	{
+		mainXMLfile = filePath;
+	}
+    QFile* file = new QFile(mainXMLfile);
     if (!file->open(QFile::WriteOnly | QFile::Text))
     {
         //QMessageBox::warning(this, "Warning", "Cannot write file");
@@ -673,12 +583,22 @@ bool MainWindow2::saveObject(QString strSavedFilename)
     doc.save(out, IndentSize);
     // -----------------------------------
 
+    if (!savingTheOLDWAY)
+    {
+		qDebug() << "Now compressing data to PFF - PCLX ...";
+
+		JlCompress::compressDir(filePath, tmpFilePath);
+		removePFFTmpDirectory(tmpFilePath); // --removing temporary files
+
+		qDebug() << "Compressed. File saved.";
+	}
+
     progress.setValue(100);
 
     m_object->modified = false;
     m_pTimeLine->updateContent();
 
-    m_object->strCurrentFilePath = strSavedFilename;
+    m_object->setFilePath( strSavedFilename );
 
     m_recentFileMenu->addRecentFile(strSavedFilename);
     m_recentFileMenu->saveToDisk();
@@ -688,9 +608,9 @@ bool MainWindow2::saveObject(QString strSavedFilename)
 
 void MainWindow2::saveDocument()
 {
-    if ( !m_object->strCurrentFilePath.isEmpty() )
+    if ( !m_object->filePath().isEmpty() )
     {
-        saveObject(m_object->strCurrentFilePath);
+        saveObject(m_object->filePath());
     }
     else
     {
@@ -861,6 +781,14 @@ void MainWindow2::writeSettings()
 
 }
 
+QKeySequence cmdKeySeq(QString strCommandName)
+{
+    strCommandName = QString("shortcuts/") + strCommandName;
+    QKeySequence keySequence( pencilSettings()->value( strCommandName ).toString() );
+
+    return keySequence;
+}
+
 void MainWindow2::loadAllShortcuts()
 {
     checkExistingShortcuts();
@@ -1017,16 +945,14 @@ void MainWindow2::importPalette()
 
 void MainWindow2::aboutPencil()
 {
-    QMessageBox::about(this, tr("Pencil2D Animation 0.5.4 beta"),
-                       tr("<table style='background-color: #DDDDDD' border='0'><tr><td valign='top'>"
-                          "<img src=':icons/logo.png' width='318' height='123' border='0'><br></td></tr><tr><td>"
-                          "Developed by: <i>Pascal Naidon</i> &  <i>Patrick Corrieri</i><br>"
-                          "Version: <b>0.5.4</b> (26 July 2013)<br><br>"
-                          "<b>Thanks to:</b><br>"
-                          "the Qt libraries <a href='http://qt-project.org'>http://qt-project.org</a><br>"                          
-                          "<a href='http://pencil2d.org'>http://pencil2d.org</a><br><br>"
-                          "Distributed under the <a href='http://www.gnu.org/copyleft/gpl.html'>GPL License</a>."
-                          "</td></tr></table>"));
+    QFile aboutFile(":resources/about.html");
+    bool isOpenOK = aboutFile.open ( QIODevice::ReadOnly | QIODevice::Text );
+
+    if ( isOpenOK )
+    {
+        QString strAboutText = QTextStream(&aboutFile).readAll();
+        QMessageBox::about(this, tr( PENCIL_WINDOW_TITLE ), strAboutText);
+    }
 }
 
 void MainWindow2::helpBox()

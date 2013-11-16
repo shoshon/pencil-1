@@ -50,6 +50,26 @@ void DisplayOptionDockWidget::createUI()
     onionNextButton->setToolTip("Onion skin next frame");
     onionNextButton->setIconSize( QSize(21,21) );
 
+    onionBlueButton = new QToolButton(displayGroup);
+    onionBlueButton->setIcon(QIcon(":icons/onion-blue.png"));
+    onionBlueButton->setToolTip("Onion skin color: blue");
+    onionBlueButton->setIconSize( QSize(21,21) );
+
+    onionRedButton = new QToolButton(displayGroup);
+    onionRedButton->setIcon(QIcon(":icons/onion-red.png"));
+    onionRedButton->setToolTip("Onion skin color: red");
+    onionRedButton->setIconSize( QSize(21,21) );
+
+    gridAButton = new QToolButton(displayGroup);
+    gridAButton->setIcon(QIcon(":icons/grid-a.png"));
+    gridAButton->setToolTip("Grid A - composition");
+    gridAButton->setIconSize( QSize(21,21) );
+
+    gridBButton = new QToolButton(displayGroup);
+    gridBButton->setIcon(QIcon(":icons/grid-b.png"));
+    gridBButton->setToolTip("Grid B - perspective");
+    gridBButton->setIconSize( QSize(21,21) );
+
     thinLinesButton->setCheckable(true);
     thinLinesButton->setChecked(false);
     outlinesButton->setCheckable(true);
@@ -62,16 +82,28 @@ void DisplayOptionDockWidget::createUI()
     onionPrevButton->setChecked(true);
     onionNextButton->setCheckable(true);
     onionNextButton->setChecked(false);
+    onionBlueButton->setCheckable(true);
+    onionBlueButton->setChecked(true);
+    onionRedButton->setCheckable(true);
+    onionRedButton->setChecked(true);
+    gridAButton->setCheckable(true);
+    gridAButton->setChecked(false);
+    gridBButton->setCheckable(true);
+    gridBButton->setChecked(false);
 
     QGridLayout* layout = new QGridLayout();
     layout->setMargin(4);
     layout->setSpacing(0);
     layout->addWidget(mirrorButton,0,0);
+    layout->addWidget(mirrorButtonV,1,0);
     layout->addWidget(thinLinesButton,0,1);
     layout->addWidget(outlinesButton,1,1);
-    layout->addWidget(mirrorButtonV,1,0);
     layout->addWidget(onionPrevButton,0,2);
     layout->addWidget(onionNextButton,1,2);
+    layout->addWidget(onionBlueButton,0,3);
+    layout->addWidget(onionRedButton,1,3);
+    layout->addWidget(gridAButton,0,4);
+    layout->addWidget(gridBButton,1,4);
 
     displayGroup->setLayout(layout);
 
@@ -84,8 +116,12 @@ void DisplayOptionDockWidget::makeConnectionToEditor(Editor* editor)
     connect(outlinesButton, SIGNAL(clicked()), editor->getScribbleArea(), SLOT(toggleOutlines()));
     connect(onionPrevButton, SIGNAL(clicked(bool)), editor, SIGNAL(toggleOnionPrev(bool)));
     connect(onionNextButton, SIGNAL(clicked(bool)), editor, SIGNAL(toggleOnionNext(bool)));
+    connect(onionBlueButton, SIGNAL(clicked(bool)), editor->getScribbleArea(), SLOT(toggleOnionBlue(bool)));
+    connect(onionRedButton, SIGNAL(clicked(bool)), editor->getScribbleArea(), SLOT(toggleOnionRed(bool)));
     connect(mirrorButton, SIGNAL(clicked()), editor, SLOT(toggleMirror()));
     connect(mirrorButtonV, SIGNAL(clicked()), editor, SLOT(toggleMirrorV()));
+    connect(gridAButton, SIGNAL(clicked(bool)), editor->getScribbleArea(), SLOT(toggleGridA(bool)));
+    connect(gridBButton, SIGNAL(clicked(bool)), editor->getScribbleArea(), SLOT(toggleGridB(bool)));
 
     connect(editor, SIGNAL(changeOutlinesButton(bool)), this, SLOT(changeOutlinesButton(bool)));
     connect(editor, SIGNAL(changeThinLinesButton(bool)), this, SLOT(changeThinLinesButton(bool)));

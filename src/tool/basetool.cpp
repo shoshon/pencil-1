@@ -33,7 +33,8 @@ QString BaseTool::TypeName(ToolType type)
 }
 
 BaseTool::BaseTool(QObject *parent) :
-QObject(parent)
+    QObject(parent),
+    adjustmentStep(0)
 {
 }
 
@@ -78,8 +79,10 @@ void BaseTool::mouseDoubleClickEvent(QMouseEvent *event)
 
 QCursor BaseTool::circleCursors() // Todo: only one instance required: make fn static?
 {
-    qreal propWidth = properties.width;
-    qreal propFeather = properties.feather;
+    qreal zoomFactor= m_pScribbleArea->getCentralViewScale(); //scale factor
+    //qDebug() << "--->" << zoomFactor;
+    qreal propWidth = properties.width * zoomFactor;
+    qreal propFeather = properties.feather * zoomFactor;
     qreal width = propWidth + 0.5 * propFeather;
 
     if (width < 1) { width = 1; }
@@ -109,10 +112,11 @@ QCursor BaseTool::circleCursors() // Todo: only one instance required: make fn s
 
 }
 
-void BaseTool::startAdjusting( ToolPropertyType argSettingType )
+void BaseTool::startAdjusting( ToolPropertyType argSettingType, qreal argStep )
 {
     isAdjusting = true;
     assistedSettingType = argSettingType;
+    adjustmentStep = argStep;
     if ( argSettingType == WIDTH )
     {
         OriginalSettingValue = properties.width;
@@ -128,6 +132,7 @@ void BaseTool::startAdjusting( ToolPropertyType argSettingType )
 void BaseTool::stopAdjusting()
 {
     isAdjusting = false;
+    adjustmentStep = 0;
     OriginalSettingValue = 0;
     m_pScribbleArea->setCursor(cursor());
 }
@@ -142,6 +147,11 @@ void BaseTool::adjustCursor(qreal argOffsetX ) //offsetx x-lastx
         newValue = 0;
     }
     newValue = pow(newValue, 2) / 100;
+
+    if (adjustmentStep>0) {
+        int tempValue = (int)(newValue/adjustmentStep); // + 0.5 ?
+        newValue = tempValue * adjustmentStep;
+    }
 
     if (newValue < 0.2) // can be optimized for size: min(200,max(0.2,newValue))
     {
